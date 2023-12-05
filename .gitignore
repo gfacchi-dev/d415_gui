@@ -1,0 +1,5 @@
+/.vscode
+/temp/*
+/__pycache__
+/acquisitions
+```
