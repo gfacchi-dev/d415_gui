@@ -25,7 +25,9 @@ from utils import (
     execute_global_registration,
     display_inlier_outlier,
     get_angles_from_transform_matrix,
-    write_filtered_image
+    write_filtered_image,
+    save,
+    normals_and_colored_icp
 )
 
 from utils2 import (  
@@ -68,7 +70,7 @@ main_window.geometry(res)
 
 #Icon:
 icon_path = "./images/"
-icon = tb.PhotoImage(file= icon_path + "logo.png")
+icon = tb.PhotoImage(file=icon_path + "logo.png")
 main_window.iconphoto(True,icon)
 
 
@@ -175,7 +177,7 @@ def unbind_event_handlers(window):
 
 
 SCALA = 3
-
+white_balance = True
 
 # Camera Right
 # Created a pipeline object managing and processing RealSense Data Stream for computer vision
@@ -191,7 +193,7 @@ pipeline_profile = config.resolve(pipeline_wrapper)
 
 # Getter (device) from the papeline
 device = pipeline_profile.get_device()
-
+device.query_sensors()[1].set_option(rs.option.enable_auto_white_balance, white_balance)
 # Activate advance mode for enhanced controls
 advnc_mode = rs.rs400_advanced_mode(device)
 
@@ -222,6 +224,7 @@ config_2.enable_device("211222063114")
 pipeline_wrapper_2 = rs.pipeline_wrapper(pipeline_2)
 pipeline_profile_2 = config_2.resolve(pipeline_wrapper_2)
 device_2 = pipeline_profile_2.get_device()
+device_2.query_sensors()[1].set_option(rs.option.enable_auto_white_balance, white_balance)
 advnc_mode_2 = rs.rs400_advanced_mode(device_2)
 current_std_depth_table_2 = advnc_mode_2.get_depth_table()
 current_std_depth_table_2.depthClampMin = 100
@@ -245,6 +248,7 @@ config_3.enable_device("210622061176")
 pipeline_wrapper_3 = rs.pipeline_wrapper(pipeline_3)
 pipeline_profile_3 = config_3.resolve(pipeline_wrapper_3)
 device_3 = pipeline_profile_3.get_device()
+device_3.query_sensors()[1].set_option(rs.option.enable_auto_white_balance, white_balance)
 advnc_mode_3 = rs.rs400_advanced_mode(device_3)
 current_std_depth_table_3 = advnc_mode_3.get_depth_table()
 current_std_depth_table_3.depthClampMin = 100
@@ -721,23 +725,28 @@ def calibrate():
     meter_update(c_meter, 10)
     
     #Get indexes as array of variance tensor image values equal 255
+    save(color_image, mean_left, "fullLeft")
+    f_color_image_l, f_depth_image_l = write_filtered_image(color_image, mean_left, "left", False)
     indexes = np.argwhere(variance_image_l == 255)
-    selected_m_l = np.copy(mean_left)
-    selected_m_l[indexes[:, 0], indexes[:, 1]] = 0
-    write_filtered_image(color_image, mean_left, "left")
+    #f_depth_image_l[indexes[:, 0], indexes[:, 1]] = 0
+    #f_color_image_l[indexes[:, 0], indexes[:, 1]] = 0
+    save(f_color_image_l, f_depth_image_l, "left")
     meter_update(c_meter, 20)
 
+    save(color_image_2, mean_right, "fullRight")
+    f_color_image_r, f_depth_image_r = write_filtered_image(color_image_2, mean_right, "right", False)
     indexes = np.argwhere(variance_image_r == 255)
-    selected_m_r = np.copy(mean_right)
-    selected_m_r[indexes[:, 0], indexes[:, 1]] = 0
-    write_filtered_image(color_image_2, mean_right, "right")
+    #f_depth_image_r[indexes[:, 0], indexes[:, 1]] = 0
+    #f_color_image_r[indexes[:, 0], indexes[:, 1]] = 0
+    save(f_color_image_r, f_depth_image_r, "right")
     meter_update(c_meter, 10)
 
+    save(color_image_3, mean_center, "fullCenter")
+    f_color_image_c, f_depth_image_c = write_filtered_image(color_image_3, mean_center, "center", False)
     indexes = np.argwhere(variance_image_c == 255)
-    selected_m_c = np.copy(mean_center)
-    selected_m_c[indexes[:, 0], indexes[:, 1]] = 0
-    write_filtered_image(color_image_3, mean_center, "center")
-    
+    #f_depth_image_c[indexes[:, 0], indexes[:, 1]] = 0
+    #f_color_image_c[indexes[:, 0], indexes[:, 1]] = 0
+    save(f_color_image_c, f_depth_image_c, "center")
     meter_update(c_meter, 10)
 
     #Read the saved images for further processing 
@@ -748,6 +757,14 @@ def calibrate():
     depth_raw_center = o3d.io.read_image("temp/centerDepth.png")
     color_raw_center = o3d.io.read_image("temp/centerColor.png")
 
+    depth_raw_left_full = o3d.io.read_image("temp/fullLeftDepth.png")
+    color_raw_left_full = o3d.io.read_image("temp/fullLeftColor.png")
+    depth_raw_right_full = o3d.io.read_image("temp/fullRightDepth.png")
+    color_raw_right_full = o3d.io.read_image("temp/fullRightColor.png")
+    depth_raw_center_full = o3d.io.read_image("temp/fullCenterDepth.png")
+    color_raw_center_full = o3d.io.read_image("temp/fullCenterColor.png")
+
+    
     #Create RGBD images from those 
     rgbd_image_left = o3d.geometry.RGBDImage.create_from_color_and_depth(
         color_raw_left, depth_raw_left, convert_rgb_to_intensity=False
@@ -758,6 +775,16 @@ def calibrate():
     rgbd_image_center = o3d.geometry.RGBDImage.create_from_color_and_depth(
         color_raw_center, depth_raw_center, convert_rgb_to_intensity=False
     )
+    rgbd_image_left_full = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        color_raw_left_full, depth_raw_left_full, convert_rgb_to_intensity=False
+    )
+    rgbd_image_right_full = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        color_raw_right_full, depth_raw_right_full, convert_rgb_to_intensity=False
+    )
+    rgbd_image_center_full = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        color_raw_center_full, depth_raw_center_full, convert_rgb_to_intensity=False
+    )
+
     #Set cameras instrinsic parameters (found before)
     camera_intrinsic_left = o3d.camera.PinholeCameraIntrinsic(
         o3d.camera.PinholeCameraIntrinsic(
@@ -802,25 +829,17 @@ def calibrate():
         rgbd_image_center, camera_intrinsic_center
     )
     
-    meter_update(c_meter, 20)
-    #Set bound for cropping the point clouds rapresenting
-    #the region in 3D space from which the point cloud will be retained 
-    bounds = [
-        [-math.inf, math.inf],   #Any coordinates for x
-        [-math.inf, math.inf],   #Any coordinates for y
-        [0.2, 0.7],              #Range that restrics depth values discarding the out of range #may need to change that 
-    ] 
-    
-    #Create a bounding box
-    bounding_box_points = list(itertools.product(*bounds))  
-    bounding_box = o3d.geometry.AxisAlignedBoundingBox.create_from_points(
-        o3d.utility.Vector3dVector(bounding_box_points)
+    full_pcd_left  = o3d.geometry.PointCloud.create_from_rgbd_image(
+        rgbd_image_left_full, camera_intrinsic_left
     )
-
-    #Crop the point cloud using the bounding box:
-    #pcd_left = pcd_left.crop(bounding_box)
-    #pcd_right = pcd_right.crop(bounding_box)
-    #pcd_center = pcd_center.crop(bounding_box)
+    full_pcd_right = o3d.geometry.PointCloud.create_from_rgbd_image(
+        rgbd_image_right_full, camera_intrinsic_right
+    )
+    full_pcd_center = o3d.geometry.PointCloud.create_from_rgbd_image(
+        rgbd_image_center_full, camera_intrinsic_center
+    )
+    
+    meter_update(c_meter, 20)
 
     #Rotation of 180° in X axes (because of pinhole camera)
     angolo = np.pi
@@ -836,6 +855,11 @@ def calibrate():
     pcd_left.transform(trans_x)
     pcd_right.transform(trans_x)
     pcd_center.transform(trans_x)
+    
+    full_pcd_left.transform(trans_x)
+    full_pcd_right.transform(trans_x)
+    full_pcd_center.transform(trans_x)
+
 
     #Rotation of 90 degrees around Z axes (because of vertical arangement of camera)
     angolo = np.pi/2
@@ -850,6 +874,9 @@ def calibrate():
     pcd_left.transform(trans_z)
     pcd_right.transform(trans_z)
 
+    full_pcd_left.transform(trans_z)
+    full_pcd_right.transform(trans_z)
+
     angolo = -np.pi/2
     trans_z = np.asarray(
         [
@@ -860,6 +887,7 @@ def calibrate():
         ]
     )
     pcd_center.transform(trans_z)
+    full_pcd_center.transform(trans_z)
     #o3d.visualization.draw_geometries([pcd_center])
     translation_x_right = [
             [1.0, 0.0, 0.0, -0.23*SCALA],
@@ -868,6 +896,7 @@ def calibrate():
             [0.0, 0.0, 0.0, 1.0],
         ]
     pcd_right.transform(translation_x_right)
+    full_pcd_right.transform(translation_x_right)
     translation_x_left = [
             [1.0, 0.0, 0.0, 0.19*SCALA],
             [0.0, 1.0, 0.0, -0.23*SCALA],
@@ -875,96 +904,50 @@ def calibrate():
             [0.0, 0.0, 0.0, 1.0],
         ]
     pcd_left.transform(translation_x_left)
+    full_pcd_left.transform(translation_x_left)
 
-    voxel_size = 0.05
+    voxel_size = 0.01
     source_L = copy.deepcopy(pcd_left)
     source_R = copy.deepcopy(pcd_right)
     target = copy.deepcopy(pcd_center)
-    # source_L_down, source_L_fpfh = preprocess_point_cloud(source_L, voxel_size)
-    # source_R_down, source_R_fpfh = preprocess_point_cloud(source_R, voxel_size)
-    # target_down, target_fpfh = preprocess_point_cloud(target, voxel_size)
 
     # Source_L_down ecc. non sono downsamplate
-    source_L_down, source_L_fpfh = preprocess_point_cloud(source_L, radius_normal=0.005, radius_feature=0.004)
-    source_R_down, source_R_fpfh = preprocess_point_cloud(source_R, radius_normal=0.005, radius_feature=0.004)
-    target_down, target_fpfh = preprocess_point_cloud(target, radius_normal=0.005, radius_feature=0.004)
+    source_L_down, source_L_fpfh = preprocess_point_cloud(source_L, radius_normal=0.01, radius_feature=0.005)
+    source_R_down, source_R_fpfh = preprocess_point_cloud(source_R, radius_normal=0.01, radius_feature=0.005)
+    target_down, target_fpfh = preprocess_point_cloud(target, radius_normal=0.01, radius_feature=0.005)
     o3d.visualization.draw_geometries([source_L_down, source_R_down, target_down])
-    repeat = True
-    # Repeat if the euler angles are higher than 90 degrees since the position of the cameras is defined
-    while repeat:
-        result_ransac = execute_global_registration(source_L_down, target_down,
-                                                source_L_fpfh, target_fpfh,
-                                                voxel_size)
-        print(result_ransac)
-        x,y,z = get_angles_from_transform_matrix(result_ransac.transformation)
-        if x>90 or x<-90 or y>90 or y<-90 or z>90 or z<-90:
-            print("Invalid, repeat")
-        else:
-            repeat=False
+    # Left to center RANSAC
+    result_ransac = execute_global_registration(source_L_down, target_down,
+                                            source_L_fpfh, target_fpfh,
+                                            voxel_size)
+    print(result_ransac)
+    x,y,z = get_angles_from_transform_matrix(result_ransac.transformation)
+    if x>90 or x<-90 or y>90 or y<-90 or z>90 or z<-90:
+        print("Invalid RANSAC result")
+        return
     final_transform_L = result_ransac.transformation
     print(final_transform_L)
-    repeat = True
-    while repeat:
-        result_ransac = execute_global_registration(source_R_down, target_down,
-                                            source_R_fpfh, target_fpfh,
-                                            voxel_size)
-        print(result_ransac)
-        x,y,z = get_angles_from_transform_matrix(result_ransac.transformation)
-        if x>90 or x<-90 or y>90 or y<-90 or z>90 or z<-90:
-            print("Invalid, repeat")
-        else:
-            repeat=False
+    # Right to center RANSAC
+    result_ransac = execute_global_registration(source_R_down, target_down,
+                                        source_R_fpfh, target_fpfh,
+                                        voxel_size)
+    print(result_ransac)
+    x,y,z = get_angles_from_transform_matrix(result_ransac.transformation)
+    if x>90 or x<-90 or y>90 or y<-90 or z>90 or z<-90:
+        print("Invalid RANSAC result")
+        return
     final_transform_R = result_ransac.transformation
     o3d.visualization.draw_geometries([pcd_left, pcd_center, pcd_right])
 
-    threshold = 0.01
     meter_update(c_meter, 10)
-    trans_init = final_transform_L
-    evaluation = o3d.pipelines.registration.evaluate_registration(
-        source_L, target, threshold, trans_init
-    )
-    print(evaluation)
     
-    radius = 0.05
-    source_L.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-    target.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-    reg_p2p = o3d.pipelines.registration.registration_colored_icp(
-        source_L, target, radius, trans_init,
-        o3d.pipelines.registration.TransformationEstimationForColoredICP(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=0,
-                                                          relative_rmse=0.004,
-                                                          max_iteration=30))
-    print(reg_p2p)
-    
+    full_icp = normals_and_colored_icp(full_pcd_left, full_pcd_center, 0.01, final_transform_L, 100, 0)
+    reg_p2p = normals_and_colored_icp(source_L, target, norm_radius=0.01, trans_init=full_icp.transformation, max_iterations=200, relative_rmse=0)
     calibrated_matrix_L2C = reg_p2p.transformation
     print(calibrated_matrix_L2C)
-
-    threshold = 0.01
-    trans_init = final_transform_R
-    meter_update(c_meter, 10)
-    
-    evaluation = o3d.pipelines.registration.evaluate_registration(
-        source_R, target, threshold, trans_init
-    )
-    print(evaluation)
-    
-    radius = 0.05
-    source_R.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-    reg_p2p = o3d.pipelines.registration.registration_colored_icp(
-        source_R, target, radius, trans_init,
-        o3d.pipelines.registration.TransformationEstimationForColoredICP(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=0,
-                                                          relative_rmse=0.004,
-                                                          max_iteration=30))
-    print(reg_p2p)
-    
-    #Caibrated matrix obtained from ICP that rapresent the transformation needed to align the two point clouds.
+    full_icp = normals_and_colored_icp(full_pcd_right, full_pcd_center, 0.01, final_transform_R, 100, 0)
+    reg_p2p = normals_and_colored_icp(source_R, target, norm_radius=0.01, trans_init=full_icp.transformation, max_iterations=200, relative_rmse=0)
     calibrated_matrix_R2C = reg_p2p.transformation
-
-    #Saved the matrix to use in the acquire() function
     pickle.dump(calibrated_matrix_L2C, open("./calibrations/" + datestring + "/cal_mat_L2C.mat", "wb"))
     pickle.dump(calibrated_matrix_R2C, open("./calibrations/" + datestring + "/cal_mat_R2C.mat", "wb"))
     
@@ -1029,8 +1012,22 @@ def acquire(mesh=False):
     color_frame_c = rgb_queue_3.get_last_frame()
     #print(depth_frame_l.dtype)
     
-    meter_update(a_meter, 10)
+    # Left taglio sopra 
 
+    depth_frame_r[400:, :] = 0
+    color_frame_r[400:, :, :] = 0
+
+    depth_frame_l[0:320, :] = 0
+    color_frame_l[0:320, :, :] = 0
+
+    depth_frame_c[:160, :] = 0
+    color_frame_c[:160, :, :] = 0
+    depth_frame_c[560:, :] = 0
+    color_frame_c[560:, :, :] = 0
+
+
+    meter_update(a_meter, 10)
+    
     #Save those images in a directory
     cv2.imwrite(f"./acquisitions/{datestring}/d_l.png", depth_frame_l)
     cv2.imwrite(f"./acquisitions/{datestring}/rgb_l.png", color_frame_l)
@@ -1226,27 +1223,6 @@ def acquire(mesh=False):
 
 
 update_real_time()
-
-
-
-# Here's a compendium:
-
-# calibrate() function is responsible for calibrating the 2 cameras, filtering thje depth queue to remove outliers and point unrealiable
-# then, getting the transform alignemnt matrix to apply later in order to align the point clouds from camera left
-# and camera right.
-#The main focus of calibrate() is preprocessing, and filtering for noise reduction operating on the depth queue
-
-
-#acquire() is responsible to capture synch depth and color frames and perform alignment of point clouds
-# using the acquire() calibration matrix, preparing the data for 3D recostruction
-# the mesh is obtained with Poisson 
-#This function get the color frame and depth frame from queues and the alignemnt matrix from acquire()
-
-
-
-
-
-
 
 
 

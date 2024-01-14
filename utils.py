@@ -229,7 +229,7 @@ def execute_global_registration(source_down, target_down, source_fpfh,
                                 target_fpfh, voxel_size):
     distance_threshold = voxel_size * 1.5
     print(":: RANSAC registration on downsampled point clouds.")
-    print("   Since the downsampling voxel size is %.3f," % voxel_size)
+    #print("   Since the downsampling voxel size is %.3f," % voxel_size)
     print("   we use a liberal distance threshold %.3f." % distance_threshold)
     result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
         source_down, target_down, source_fpfh, target_fpfh, True,
@@ -240,7 +240,7 @@ def execute_global_registration(source_down, target_down, source_fpfh,
                 0.9),
             o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(
                 distance_threshold)
-        ], o3d.pipelines.registration.RANSACConvergenceCriteria(1000000, 1))
+        ], o3d.pipelines.registration.RANSACConvergenceCriteria(max_iteration=1000000, confidence=1.0))
     return result
 
 
@@ -266,15 +266,7 @@ def get_angles_from_transform_matrix(matrix):
     angles = r.as_euler("xyz",degrees=True)
     return angles[0], angles[1], angles[2]
 
-def write_filtered_image(color_image, depth_image, name):
-    # Remove white
-    # rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
-    # gray_image = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    
-    # black_and_white = cv2.adaptiveThreshold(gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 5)
-    # inverted_image = 255-black_and_white
-    # rgb = cv2.bitwise_and(rgb, rgb, mask=inverted_image)
-
+def write_filtered_image_old(color_image, depth_image, name):
     hsv_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
     lower_blue = np.array([100,100,50])
     upper_blue = np.array([130,255,255])
@@ -299,3 +291,58 @@ def write_filtered_image(color_image, depth_image, name):
 
     cv2.imwrite(f"temp/{name}Depth.png", np.uint16(depth_image_filtered))
     cv2.imwrite(f"temp/{name}Color.png", np.asanyarray(color_image_filtered))
+
+def write_filtered_image(color_image, depth_image, name, save=True):
+    range_bound = 40
+    min_saturation = 80
+    min_value = 50
+    max_value = 255
+    hsv_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
+
+    lower_blue = np.array([120-range_bound,min_saturation,min_value])
+    upper_blue = np.array([120+range_bound,255,max_value])
+    blue_mask = cv2.inRange(hsv_image, lower_blue, upper_blue)
+
+    lower_red = np.array([0,min_saturation,min_value])
+    upper_red = np.array([range_bound,255,max_value])
+    red_mask_1 = cv2.inRange(hsv_image, lower_red, upper_red)
+    lower_red = np.array([180-range_bound,min_saturation,min_value])
+    upper_red = np.array([180,255,max_value])
+    red_mask_2 = cv2.inRange(hsv_image, lower_red, upper_red)
+    red_mask = cv2.bitwise_or(red_mask_1, red_mask_2)
+
+    lower_green = np.array([60-range_bound*1.5,min_saturation,min_value])
+    upper_green = np.array([60+range_bound*1.5,255,max_value])
+    green_mask = cv2.inRange(hsv_image, lower_green, upper_green)
+
+    #Filter only the red colour from the original image using the mask (foreground)
+    mask = cv2.bitwise_or(blue_mask, red_mask)
+    mask = cv2.bitwise_or(mask, green_mask)
+    kernel = np.ones((5, 5), np.uint8) 
+    img_dilation = cv2.dilate(mask, kernel, iterations=1) 
+    color_image_filtered = cv2.bitwise_and(color_image, color_image, mask=mask)
+    depth_image_filtered = cv2.bitwise_and(depth_image, depth_image, mask=mask)
+    cv2.imshow("Preview of color-thresholding", color_image_filtered)
+    cv2.waitKey(0)
+    if save:
+        cv2.imwrite(f"temp/{name}Depth.png", np.uint16(depth_image_filtered))
+        cv2.imwrite(f"temp/{name}Color.png", np.asanyarray(color_image_filtered))
+    return color_image_filtered, depth_image_filtered
+
+def save(color_image, depth_image, name):
+    cv2.imwrite(f"temp/{name}Depth.png", np.uint16(depth_image))
+    cv2.imwrite(f"temp/{name}Color.png", np.asanyarray(color_image))
+
+def normals_and_colored_icp(source, target, norm_radius, trans_init, max_iterations, relative_rmse):
+    radius = norm_radius
+    source.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
+    target.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
+    reg_p2p = o3d.pipelines.registration.registration_colored_icp(
+        source, target, radius, trans_init,
+        o3d.pipelines.registration.TransformationEstimationForColoredICP(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=0,
+                                                          relative_rmse=relative_rmse,
+                                                          max_iteration=max_iterations))
+    return reg_p2p
