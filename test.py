@@ -28,23 +28,22 @@ def points_from_line(line, std=0.1, begin=10, stop=10, n_points=300, noise=True)
     return points
 
 
-# p_c = [0., 0.2, 1., 1.]
-# p_l = [6., 2., 5., 4.]
 p_c = [1., 2., 8., 1.]
 p_l = [-1., 4., 5., 2.]
+# Piano parallelo all'asse XY
+p_ref = [0., 0., 1., 0.]
 
 real_p_c = points_from_plane(p_c, std=0.01, begin=1, stop=1, n_points=300, noise=True)
 real_p_l = points_from_plane(p_l, std=0.01, begin=1, stop=1, n_points=300, noise=True)
 
-a,b,c,d = fit_plane_to_points(real_p_c)
+a,b,c,d, _ = fit_plane_to_points(real_p_c)
 est_p_c = [a,b,c,d]
 est_pcd_c = o3d.geometry.PointCloud()
 est_pcd_c.points = o3d.utility.Vector3dVector(points_from_plane(est_p_c, std=0.01, begin=1, stop=1, n_points=300, noise=False))
 est_pcd_c.paint_uniform_color([0, 0, 1])
-a,b,c,d = fit_plane_to_points(real_p_l)
+a,b,c,d, _ = fit_plane_to_points(real_p_l)
 est_p_l = [a,b,c,d]
 est_pcd_l = o3d.geometry.PointCloud()
-# est_pcd_l.normals = o3d.utility.Vector3dVector([est_p_l[:3]])
 est_pcd_l.points = o3d.utility.Vector3dVector(points_from_plane(est_p_l, std=0.01, begin=1, stop=1, n_points=300, noise=False))
 
 print("R plane_c: ", p_c)
@@ -61,21 +60,29 @@ real_pcd_l.points = o3d.utility.Vector3dVector(real_p_l)
 real_pcd_l.paint_uniform_color([0, 1, 0])
 o3d.visualization.draw_geometries([real_pcd_c, real_pcd_l, mesh_frame])
 
-R_l, p_l_rot = compute_rotation(est_p_l, est_p_c)
+R_l, p_l_rot = compute_rotation(est_p_l, p_ref)
+print("R_l: ", R_l)
+R_c, p_c_rot = compute_rotation(est_p_c, p_ref)
 real_pcd_l.rotate(R_l)
 est_pcd_l.rotate(R_l)
+real_pcd_c.rotate(R_c)
+est_pcd_c.rotate(R_c)
 
 o3d.visualization.draw_geometries([real_pcd_c, real_pcd_l, est_pcd_l, mesh_frame])
 
-a,b,c,d = fit_plane_to_points(np.asarray(est_pcd_l.points))
+a,b,c,d, _ = fit_plane_to_points(np.asarray(est_pcd_l.points))
 
-t_vector = translation_vector([a,b,c,d], est_p_c)
+t_vector = translation_vector([a,b,c,d], p_ref)
+print(t_vector)
 #t_vector = translation_vector(est_p_c, [a,b,c,d])
 
 #distance = np.linalg.norm(t_vector)
 #t_vector = distance * np.array([a,b,c])
 
-est_pcd_l.translate(t_vector, relative=True)
-real_pcd_l.translate(t_vector, relative=True)
+est_pcd_l.translate([0,0,0], relative=False)
+real_pcd_l.translate([0,0,0], relative=False)
+est_pcd_c.translate([0,0,0], relative=False)
+real_pcd_c.translate([0,0,0], relative=False)
 print(f'translation vector: {t_vector}')
-o3d.visualization.draw_geometries([real_pcd_c, est_pcd_l, real_pcd_l, mesh_frame])
+
+o3d.visualization.draw_geometries([est_pcd_l, real_pcd_l, mesh_frame, est_pcd_c, real_pcd_c])

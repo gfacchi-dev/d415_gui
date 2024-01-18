@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import scipy
 import open3d as o3d
+from scipy.optimize import minimize
 
 
 def remove_outliers(point_cloud, threshold=1.0):
@@ -25,34 +26,20 @@ def fit_plane_to_points(points):
     points = remove_outliers(points)
 
     # Salva i points filtrati in un np array e ritornalo in formato open3d pointcloud
-    #o3d_points = o3d.geometry.PointCloud()
-    #o3d_points.points = o3d.utility.Vector3dVector(points)
+    o3d_points = o3d.geometry.PointCloud()
+    o3d_points.points = o3d.utility.Vector3dVector(points)
 
     ones_column = np.ones((points.shape[0], 1))
     # Keep only first 2 dimensions of points
     points_extended = np.hstack([points[:, :2], ones_column])
-    print(points_extended.shape)
     coeff, _, _, _ = np.linalg.lstsq(points_extended, points[:, -1], rcond=None)
     A, B, D = coeff
     C = -1
     #est_d = (- A * points[:, 0] - B * points[:, 1] - C * points[:, 2])
     #D = np.mean(est_d)
 
-    return A, B, C, D #, o3d_points
+    return -A, -B, -C, -D#, o3d_points
 
-
-def fit_line(points):
-    # Costruisci la matrice A e il vettore B
-    A = np.column_stack((points, np.ones(len(points))))
-    B = -np.ones(len(points))
-
-    # Risolvi il sistema Ax = B mediante minimi quadrati
-    coeff, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
-
-    # Estrai i coefficienti
-    a, b, c, d = coeff
-
-    return a, b, c, d
 
 def get_rotation_between_lines(v1, v2) -> np.ndarray((3,3)):
     # Passo 1
@@ -74,30 +61,11 @@ def get_rotation_between_lines(v1, v2) -> np.ndarray((3,3)):
 
     return R
 
-def find_intersection(a1, b1, c1, d1, a2, b2, c2, d2) -> np.ndarray(3):
-    # Coefficients of the plane equation
-    A = a1 - a2
-    B = b1 - b2
-    C = c1 - c2
-    D = d1 - d2
-
-    # Choose one variable (e.g., z) and set it to 0
-    z = 0
-
-    # Solve for x and y
-    x = -D / A
-    y = -D / B
-
-    # Return the intersection point
-    return np.array([x, y, z])
-
 
 def compute_rotation(p1, p2):
     A1, B1, C1, D1 = p1
     A2, B2, C2, D2 = p2
     Z =  (-A1 * 1 - B1 * 1 - D1) / C1
-    point = np.array([1, 1, Z])
-
     # Normalizza i vettori normali
     n1 = np.array([A1, B1, C1])
     n2 = np.array([A2, B2, C2])
@@ -107,8 +75,6 @@ def compute_rotation(p1, p2):
     # Trova l'asse di rotazione
     asse_rotazione = np.cross(n1, n2)
     asse_rotazione /= np.linalg.norm(asse_rotazione)
-    print(asse_rotazione)
-    print(np.sum(asse_rotazione**2))
     # Trova l'angolo di rotazione
     angolo_rotazione = np.arccos(np.dot(n1, n2))
     # Matrice di rotazione
@@ -124,34 +90,7 @@ def compute_rotation(p1, p2):
          np.cos(angolo_rotazione) + asse_rotazione[2]**2 * (1 - np.cos(angolo_rotazione))]
     ])
 
-    p1 = rotate_plane_equation(p1, R, point)
-    # Matrice di rototraslazione
-    #t_vector = compute_translation_vector(p1, p2)
-    #print(t_vector)
-
-    return R, p1 #, t_vector
-
-
-def rotate_plane_equation(coefficients_plane, rotation_matrix, point):
-    # Estrai i coefficienti del piano originale
-    a, b, c, d = coefficients_plane
-    
-    # Costruisci il vettore normale al piano
-    normal_vector = np.array([a, b, c])
-
-    # Applica la rotazione al vettore normale
-    rotated_normal_vector = np.dot(rotation_matrix, normal_vector)
-    
-    # Estrai i nuovi coefficienti dopo la rotazione
-    a_rotated, b_rotated, c_rotated = rotated_normal_vector
-
-    # Ruota il punto
-    p_rot = np.dot(rotation_matrix, point)
-    d_rotated = -a_rotated * p_rot[0] - b_rotated * p_rot[1] - c_rotated * p_rot[2]
-    print(f'point: {point}, p_rot: {p_rot}')
-    print(f'coefficients: a_rotated: {a_rotated}, b_rotated: {b_rotated}, c_rotated: {c_rotated}, d_rotated: {d_rotated}')
-    print(f'coefficients old a: {a}, b: {b}, c: {c}, d: {d}')
-    return a_rotated, b_rotated, c_rotated, d_rotated
+    return R
 
 
 
@@ -173,46 +112,98 @@ def get_plane_pcd(coeffs, color: list = [0, 0, 1]):
     point_cloud.paint_uniform_color(color)
     return point_cloud
 
-def translation_vector(p1, p2):
-    # Estrai i coefficienti dei piani
-    a1, b1, c1, d1 = p1
-    a2, b2, c2, d2 = p2
-    n1 = np.array([a1, b1, c1])
-    n2 = np.array([a2, b2, c2])
+
+def error_function(params, data_points):
+    P0 = params[:3]  # i primi tre valori sono le coordinate di P0
+    v = params[3:]   # i successivi tre valori sono le componenti del vettore direzionale
+    distances = np.linalg.norm(np.cross(data_points - P0, v), axis=1) / np.linalg.norm(v)
+    return np.sum(distances**2)
+
+def fit_line(data_points):
+    # Inizializzazione dei parametri (sostituisci con valori ragionevoli)
+    initial_params = np.array([0,1,0, 0,0.5,0])
+
+    # Ottimizzazione dei parametri utilizzando la libreria scipy
+    result = minimize(error_function, initial_params, args=(data_points,), method='L-BFGS-B')
+
+    # Estrazione dei parametri ottimali
+    optimal_params = result.x
+    P0_optimal = optimal_params[:3]
+    v_optimal = optimal_params[3:]
+
+    return P0_optimal, v_optimal
+
+def get_t_from_correspondence(p1, p1_c):
+    x1, y1 = p1[:2]
+    x1_c, y1_c = p1_c[:2]
+
+    Dx = - (x1 - x1_c)
+    Dy = - (y1 - y1_c)
+    return np.array([Dx, Dy, 0])
+
+def get_R_from_correspondence(p1_l, p1_r, p2_l, p2_r):
+    x1_l, y1_l = p1_l[:2]
+    x2_l, y2_l = p2_l[:2]
+    x1_r, y1_r = p1_r[:2]
+    x2_r, y2_r = p2_r[:2]
+    # Trova l'angolo di rotazione
+    theta_l = np.arctan2(y2_l - y1_l, x2_l - x1_l)
+    theta_r = np.arctan2(y2_r - y1_r, x2_r - x1_r)
+    theta = theta_l - theta_r
+    print("Angolo:" ,theta)
+
+    # Costruisci la matrice di rotazione
+    rotation_matrix = np.array([
+        [np.cos(theta), -np.sin(theta), 0],
+        [np.sin(theta), np.cos(theta), 0],
+        [0, 0, 1]
+    ])
+    return rotation_matrix
+
+import cv2
+def rgb_point_to_pcd_index(point, rgb_frame, depth_frame, camera, original_point_cloud):
+    print(rgb_frame.shape)
+    print(depth_frame.shape)
+    depth_masked_point = np.zeros((rgb_frame.shape[0], rgb_frame.shape[1]), dtype=np.uint16)
+    depth_masked_point[point[1], point[0]] = depth_frame[point[1], point[0]]
+    print(depth_masked_point.shape)
+    print(type(depth_masked_point))
+    tmp = rgb_frame.copy()
+    cv2.circle(tmp, (point[0], point[1]), 5, (255,0,0), -1)
+    cv2.imshow("tmp", tmp)
+    cv2.waitKey(0)
+    pcd_corner_c_1 = camera.get_pcd_from_rgb_depth(rgb_frame, depth_masked_point)
+    point_coord = np.asarray(pcd_corner_c_1.points)[0]
+    points = np.asarray(original_point_cloud.points)
+    index = np.where(np.all(points == point_coord, axis=1))[0]
+    return index
+
+def matrix_between_vectors(v1, v2, clockwise: bool = True):
+    dot_product = np.dot(v1, v2)
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
     
-    # Trovo un punto appartenente a p1 e p2
-    x, y = 0, 0
-    z = (-a1*x - b1*y - d1)/c1
-    point_on_plane1 = np.array([x, y, z])
-    z = (-a2*x - b2*y - d2)/c2
-    point_on_plane2 = np.array([x, y, z])
+    # Calcola l'angolo in radianti
+    if clockwise:
+        angle_rad = - (np.arccos(dot_product / (norm_v1 * norm_v2)))
+    else:
+        angle_rad = (np.arccos(dot_product / (norm_v1 * norm_v2)))
+    # Matrice di rotazione attorno all'asse z
+    R = np.array([
+        [np.cos(angle_rad), -np.sin(angle_rad), 0],
+        [np.sin(angle_rad), np.cos(angle_rad), 0],
+        [0, 0, 1]
+    ])
+    return R
 
-    vector_to_point =  point_on_plane2 - point_on_plane1
-    
-    # scale_factor = -np.dot(vector_to_point, n2) / np.linalg.norm(n2)**2
-    
-    # # Calcola la proiezione del punto sul piano
-    # projected_point = point_on_plane2 + scale_factor * n2
-    # print(f'point_on_plane1: {point_on_plane1}, point_on_plane2: {point_on_plane2}, projected_point: {projected_point}')
-    # # Calcolo il vettore di traslazione
-    # t_vector = projected_point - point_on_plane1
+def project_point_on_plane(point, plane):
+    a, b, c = plane[:3]
+    d = plane[3]
+    x, y, z = point
 
-    return vector_to_point
+    den = a**2 + b**2 + c**2
+    proj_x = x - ((a*x + b*y + c*z + d*c) / den) * a
+    proj_y = y - ((a*x + b*y + c*z + d*c) / den) * b
+    proj_z = z - ((a*x + b*y + c*z + d*c) / den) * c
 
-def distance_between_planes(coefficients_plane1, coefficients_plane2):
-    # Scegli un punto su uno dei piani (ad esempio, l'origine)
-    
-
-    # Estrai i coefficienti dei piani
-    a1, b1, c1, d1 = coefficients_plane1
-    a2, b2, c2, d2 = coefficients_plane2
-
-    x = 0 
-    y = 0
-    z = (-a1*x - b1*y - d1)/c1
-    point_on_plane1 = np.array([x, y, z])
-
-    # Calcola la distanza
-    distance = np.abs(a2 * point_on_plane1[0] + b2 * point_on_plane1[1] + c2 * point_on_plane1[2] + d2) / np.sqrt(a2**2 + b2**2 + c2**2)
-
-    return distance
+    return np.array([proj_x, proj_y, proj_z])

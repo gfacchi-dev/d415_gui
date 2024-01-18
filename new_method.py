@@ -7,6 +7,11 @@ from geometry import *
 from camera import Camera
 import torch
 import math
+from utils import *
+from scipy.optimize import minimize
+from qreader import QReader
+import copy
+
 
 def flip_180(pcd):
     """
@@ -81,12 +86,18 @@ def filter_color(rgb, depth, color):
         mask = cv2.inRange(hsv, lower_lower_red, upper_lower_red)
         mask += cv2.inRange(hsv, lower_red, upper_red)
     if color=="blue":
-        lower_blue = np.array([100, 100, 100])
-        upper_blue = np.array([140, 255, 255])
+        lower_blue = np.array([90, 80, 80])
+        upper_blue = np.array([150, 255, 255])
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
     rgb_filt = cv2.bitwise_and(rgb, rgb, mask=mask)
     depth_filt = cv2.bitwise_and(depth, depth, mask=mask)
     return rgb_filt, depth_filt
+
+
+
+
+
+
 
 SCALA = 3
 colorizer = rs.colorizer()
@@ -95,12 +106,47 @@ left = Camera("Left", "211222063114", SCALA, 100, 800)
 right = Camera("Right", "211122060792", SCALA, 100, 800)
 cnt = 0
 while True:
-    if cnt<270:
+    if cnt<30:
         cnt += 1
         continue
-    pcd_center, (rgb_c, depth_c) = center.get_pcd_and_frames(filter_pcd=True)
-    pcd_left, (rgb_l, depth_l) = left.get_pcd_and_frames(filter_pcd=True)
-    pcd_right, (rgb_r, depth_r) = right.get_pcd_and_frames(filter_pcd=True)
+    
+    for i in range(0,90):
+        center.get_frame_and_add_to_queue()
+        left.get_frame_and_add_to_queue()
+        right.get_frame_and_add_to_queue()
+    
+    (
+        mean_left,
+        variance_left,
+        inliers_left,
+        median_left
+    ) = mean_variance_and_inliers_along_third_dimension_ignore_zeros(
+        torch.from_numpy(left.depth_queue)
+    )
+    (
+        mean_center,
+        variance_center,
+        inliers_center,
+        median_center
+    ) = mean_variance_and_inliers_along_third_dimension_ignore_zeros(
+        torch.from_numpy(center.depth_queue)
+    )
+    (
+        mean_right,
+        variance_right,
+        inliers_right,
+        median_right
+    ) = mean_variance_and_inliers_along_third_dimension_ignore_zeros(
+        torch.from_numpy(right.depth_queue)
+    )
+
+    pcd_center = center.get_pcd_from_rgb_depth(center.last_rgb, mean_center)
+    pcd_left = left.get_pcd_from_rgb_depth(left.last_rgb, mean_left)
+    pcd_right = right.get_pcd_from_rgb_depth(right.last_rgb, mean_right)
+
+    original_center = copy.deepcopy(pcd_center)
+    original_left = copy.deepcopy(pcd_left)
+    original_right = copy.deepcopy(pcd_right)
 
     # Flip it, otherwise the pointcloud will be upside down
     flip_180(pcd_center)
@@ -115,175 +161,150 @@ while True:
     # Show pcd
     #o3d.visualization.draw_geometries([pcd])
     points = np.asarray(pcd_center.points)
-    a_c, b_c, c_c, d_c, filtered_points_c = fit_plane_to_points(points)
+    a_c, b_c, c_c, d_c = fit_plane_to_points(points)
     plane_c = (a_c, b_c, c_c, d_c)
     n_c = (a_c, b_c, c_c)
     points = np.asarray(pcd_left.points)
-    a_l, b_l, c_l, d_l, filtered_points_l = fit_plane_to_points(points)
+    a_l, b_l, c_l, d_l = fit_plane_to_points(points)
     plane_l = (a_l, b_l, c_l, d_l)
     n_l = (a_l, b_l, c_l)
     points = np.asarray(pcd_right.points)
-    a_r, b_r, c_r, d_r, filtered_points_r = fit_plane_to_points(points)
+    a_r, b_r, c_r, d_r = fit_plane_to_points(points)
     plane_r = (a_r, b_r, c_r, d_r)
     n_r = (a_r, b_r, c_r)
+    # REFERENCE PLANE
+    p_ref = [0., 0., 1., 0.]
 
-    o3d.visualization.draw_geometries([filtered_points_c, pcd_center])
-    o3d.visualization.draw_geometries([filtered_points_l, pcd_left])
-    o3d.visualization.draw_geometries([filtered_points_r, pcd_right])
 
     # Draw plane 
     center_plane = get_plane_pcd(plane_c, color=[1, 0, 0])
     left_plane = get_plane_pcd(plane_l, color=[0, 1, 0])
     right_plane = get_plane_pcd(plane_r, color=[0, 0, 1])
+    ref_plane = get_plane_pcd(p_ref, color=[0, 0, 0])
 
-    o3d.visualization.draw_geometries([filtered_points_c, center_plane])
-    o3d.visualization.draw_geometries([filtered_points_l, left_plane])
-    o3d.visualization.draw_geometries([filtered_points_r, right_plane])
     
-    o3d.visualization.draw_geometries([pcd_left, left_plane])
-    o3d.visualization.draw_geometries([pcd_right, right_plane])
-
-    o3d.visualization.draw_geometries([pcd_left, left_plane, pcd_center, center_plane, pcd_right, right_plane])
-    # Riduci le cifre decimali con il print formattato
-
-    print(f"Equazione del piano centrale: {a_c}x + {b_c}y + {c_c}z + {d_c} = 0")
-    print(f"Equazione del piano sinistro: {a_l}x + {b_l}y + {c_l}z + {d_l} = 0")
-    print(f"Equazione del piano destro: {a_r}x + {b_r}y + {c_r}z + {d_r} = 0")
-
-    print(f"n_c: {n_c}")
-    print(f"n_l: {n_l}")
-    print(f"n_r: {n_r}")
+    o3d.visualization.draw_geometries([pcd_left, left_plane, pcd_right, right_plane, pcd_center, center_plane])
 
     # Calcola la matrice di rotazione tra i piani
-    R_left, plane_l_rot = compute_rotation(plane_l, plane_c)
-    R_right, plane_r_rot = compute_rotation(plane_r, plane_c)
+    R_left = compute_rotation(plane_l, p_ref)
+    R_right = compute_rotation(plane_r, p_ref)
+    R_center = compute_rotation(plane_c, p_ref)
 
-    pcd_left.rotate(R_left)
-    pcd_right.rotate(R_right)
+    pcd_left.rotate(R_left, center=(0,0,0))
+    left_plane.rotate(R_left, center=(0,0,0))
+    o3d.visualization.draw_geometries([pcd_left, left_plane, ref_plane])
+    
+    #t_a, t_b, t_c, d = fit_plane_to_points(np.asarray(pcd_left.points))
+    _, _, _, d = fit_plane_to_points(np.asarray(left_plane.points))
+    _, _, _, d2 = fit_plane_to_points(np.asarray(pcd_left.points))
+    # print("d_pcd: ", d, " d_plane: ", d2)
+    pcd_left.translate([0,0,-d2], relative=True)
+    left_plane.translate([0,0,-d2], relative=True)
+    o3d.visualization.draw_geometries([pcd_left, left_plane, ref_plane])
 
-    distance_l2c = distance_between_planes(plane_l_rot, plane_c)
-    distance_r2c = distance_between_planes(plane_r_rot, plane_c)
+    pcd_right.rotate(R_right, center=(0,0,0))
+    right_plane.rotate(R_right, center=(0,0,0))
+    _, _, _, d = fit_plane_to_points(np.asarray(right_plane.points))
+    _, _, _, d2 = fit_plane_to_points(np.asarray(pcd_right.points))
+    print("d_pcd: ", d2, " d_plane: ", d)
+    pcd_right.translate([0,0,-d2], relative=True)
+    right_plane.translate([0,0,-d2], relative=True)
+    o3d.visualization.draw_geometries([pcd_right, right_plane, ref_plane])
 
-    n_c /= np.linalg.norm(n_c)
-    n_l /= np.linalg.norm(n_l)
-    n_r /= np.linalg.norm(n_r)
-
-
-    translation_left = distance_l2c * n_l
-    translation_right = distance_r2c * n_r
-
-    pcd_left.translate(translation_left, relative=True)
-    pcd_right.translate(translation_right, relative=True)
+    pcd_center.rotate(R_center)
+    center_plane.rotate(R_center)
+    _, _, _, d = fit_plane_to_points(np.asarray(center_plane.points))
+    _, _, _, d2 = fit_plane_to_points(np.asarray(pcd_center.points))
+    print("d_pcd: ", d2, " d_plane: ", d)
+    pcd_center.translate([0,0,-d2], relative=True)
+    center_plane.translate([0,0,-d2], relative=True)
+    o3d.visualization.draw_geometries([pcd_center, center_plane, ref_plane])
 
     o3d.visualization.draw_geometries([left_plane, center_plane, right_plane])
-    continue
-    #o3d.visualization.draw_geometries([pcd_center, pcd_left, pcd_right, point_cloud])
+    o3d.visualization.draw_geometries([pcd_left, pcd_center, pcd_right])
+
+    image_c = center.last_rgb
+    image_l = left.last_rgb
+    image_r = right.last_rgb
+
+    # Decodifica i codici QR nell'immagine
+    qreader = QReader()
+    print(image_c.shape)
+    center_qr = qreader.detect(image_c)[0]['quad_xy']
+    print("center_qr: ", center_qr)
+    corner_center_1 = np.array([center_qr[2][0], center_qr[2][1]], dtype=np.int32)
+    corner_center_2 = np.array([center_qr[3][0], center_qr[3][1]], dtype=np.int32)
+
+    left_qr = qreader.detect(image_l)[0]['quad_xy']
+    print("left_qr: ", left_qr)
+    corner_left_1 = np.array([left_qr[0][0], left_qr[0][1]], dtype=np.int32)
+    corner_left_2 = np.array([left_qr[1][0], left_qr[1][1]], dtype=np.int32)
+
+    right_qr = qreader.detect(image_r)[0]['quad_xy']
+    print("right_qr: ", right_qr)
+    corner_right_1 = np.array([right_qr[0][0], right_qr[0][1]], dtype=np.int32)
+    corner_right_2 = np.array([right_qr[1][0], right_qr[1][1]], dtype=np.int32)
+
+    print("Pixel 1 center: ", corner_center_1)
+    corner_c1_index = rgb_point_to_pcd_index(corner_center_1, image_c, np.asarray(mean_center), center, original_center)
+    print("Pixel 2 center: ", corner_center_2)
+    corner_c2_index = rgb_point_to_pcd_index(corner_center_2, image_c, np.asarray(mean_center), center, original_center)
+
+    print("Pixel 1 left: ", corner_left_1)
+    corner_l1_index = rgb_point_to_pcd_index(corner_left_1, image_l, np.asarray(mean_left), left, original_left)
+    print("Pixel 2 left: ", corner_left_2)
+    corner_l2_index = rgb_point_to_pcd_index(corner_left_2, image_l, np.asarray(mean_left), left, original_left)
+
+    print("Pixel 1 right: ", corner_right_1)
+    corner_r1_index = rgb_point_to_pcd_index(corner_right_1, image_r, np.asarray(mean_right), right, original_right)
+    print("Pixel 2 right: ", corner_right_2)
+    corner_r2_index = rgb_point_to_pcd_index(corner_right_2, image_r, np.asarray(mean_right), right, original_right)
+
+    # Trovo il punto corrispondente all'indice nella pointcloud
+    corner_c_1 = np.asarray(pcd_center.points)[corner_c1_index][0]
+    corner_c_2 = np.asarray(pcd_center.points)[corner_c2_index][0]
+    corner_l_1 = np.asarray(pcd_left.points)[corner_l1_index][0]
+    corner_l_2 = np.asarray(pcd_left.points)[corner_l2_index][0]
+    corner_r_1 = np.asarray(pcd_right.points)[corner_r1_index][0]
+    corner_r_2 = np.asarray(pcd_right.points)[corner_r2_index][0]
+
+    print("corner_c_1: ", corner_c_1)
+    print("corner_l_1: ", corner_l_1)
+    print("corner_r_1: ", corner_r_1)
+    T_L2C = get_t_from_correspondence(corner_l_1, corner_c_1)
+    T_R2C = get_t_from_correspondence(corner_r_1, corner_c_1)
+    print("T_L2C: ", T_L2C)
+    print("T_R2C: ", T_R2C)
+    o3d.visualization.draw_geometries([pcd_center, pcd_left, pcd_right])
+
+    pcd_left.translate(T_L2C, relative=True)
+    pcd_right.translate(T_R2C, relative=True)
+
+    o3d.visualization.draw_geometries([pcd_center, pcd_left, pcd_right])
+
+
+    v1 = corner_l_2 - corner_l_1
+    v2 = corner_c_2 - corner_c_1
+    R_L2C = matrix_between_vectors(v2, v1, clockwise=True)
+    rot_center = np.asarray(pcd_left.points)[corner_l1_index][0]
+    pcd_left.rotate(R_L2C, center=rot_center)
     
-    # Soglia per colore le due linee che costituiscono la croce 
-    red_c = filter_color(rgb_c, depth_c, "red")
-    red_l = filter_color(rgb_l, depth_l, "red")
-    red_r = filter_color(rgb_r, depth_r, "red")
-
-    blue_c = filter_color(rgb_c, depth_c, "blue")
-    blue_l = filter_color(rgb_l, depth_l, "blue")
-    blue_r = filter_color(rgb_r, depth_r, "blue")
-
-
-    # Costruisco point cloud con i soli punti rossi
-    red_pcd_c = c_c.get_pcd_from_rgb_depth(red_c, depth_c)
-    red_pcd_l = c_l.get_pcd_from_rgb_depth(red_l, depth_l)
-    red_pcd_r = c_r.get_pcd_from_rgb_depth(red_r, depth_r)
-
-    blue_pcd_c = c_c.get_pcd_from_rgb_depth(blue_c, depth_c)
-    blue_pcd_l = c_l.get_pcd_from_rgb_depth(blue_l, depth_l)
-    blue_pcd_r = c_r.get_pcd_from_rgb_depth(blue_r, depth_r)
-
-
-    proj_points_c = np.zeros((len(red_pcd_c.points), 3))
-    proj_points_l = np.zeros((len(red_pcd_l.points), 3))
-    proj_points_r = np.zeros((len(red_pcd_r.points), 3))
-
-    # Proietto le pointcloud rosse sul piano stimato 
-    for i, point in enumerate(red_pcd_c.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_c[i] = point
-    for i, point in enumerate(red_pcd_l.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_l[i] = point
-    for i, point in enumerate(red_pcd_r.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_r[i] = point
-
-    a_line_c_red, b_line_c_red, c_line_c_red, d_line_c_red = fit_line(proj_points_c)
-    a_line_l_red, b_line_l_red, c_line_l_red, d_line_l_red = fit_line(proj_points_l)
-    a_line_r_red, b_line_r_red, c_line_r_red, d_line_r_red = fit_line(proj_points_r)
-
-    proj_points_c = np.zeros((len(blue_pcd_c.points), 3))
-    proj_points_l = np.zeros((len(blue_pcd_l.points), 3))
-    proj_points_r = np.zeros((len(blue_pcd_r.points), 3))
-    # Proietto le pointcloud blu sul piano stimato
-    for i, point in enumerate(blue_pcd_c.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_c[i] = point
-    for i, point in enumerate(blue_pcd_l.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_l[i] = point
-    for i, point in enumerate(blue_pcd_r.points):
-        point[0], point[1], point[2] = project_point_on_plane(point[0], point[1], point[2], a_c, b_c, c_c, d_c)
-        proj_points_r[i] = point
-
-    a_line_c_blue, b_line_c_blue, c_line_c_blue, d_line_c_blue = fit_line(proj_points_c)
-    a_line_l_blue, b_line_l_blue, c_line_l_blue, d_line_l_blue = fit_line(proj_points_l)
-    a_line_r_blue, b_line_r_blue, c_line_r_blue, d_line_r_blue = fit_line(proj_points_r)
-
-    intersection_c = find_intersection(a_line_c_red, b_line_c_red, c_line_c_red, d_line_c_red, a_line_c_blue, b_line_c_blue, c_line_c_blue, d_line_c_blue)
-    intersection_l = find_intersection(a_line_l_red, b_line_l_red, c_line_l_red, d_line_l_red, a_line_l_blue, b_line_l_blue, c_line_l_blue, d_line_l_blue)
-    intersection_r = find_intersection(a_line_r_red, b_line_r_red, c_line_r_red, d_line_r_red, a_line_r_blue, b_line_r_blue, c_line_r_blue, d_line_r_blue)
-
-
-    translation_l_2_c = intersection_c - intersection_l
-    translation_r_2_c = intersection_c - intersection_r
-
-    # Trasla la pointcloud di sinistra
-    pcd_left.translate(translation_l_2_c, relative=True)
-    # Trasla la pointcloud di destra
-    pcd_right.translate(translation_r_2_c, relative=True)
-
-    # Calcola la matrice di rotazione le rette blu 
-    m_line_c_blue = -a_line_c_blue / b_line_c_blue
-    m_line_l_blue = -a_line_l_blue / b_line_l_blue
-    m_line_r_blue = -a_line_r_blue / b_line_r_blue
-
-    angle_l_blue, angle_l_blue_deg = angle_between_lines(m_line_c_blue, m_line_l_blue)
-    angle_r_blue, angle_r_blue_deg = angle_between_lines(m_line_c_blue, m_line_r_blue)
-
-
-    # Calcola la matrice di rotazione tra le rette rosse
-    m_line_c_red = -a_line_c_red / b_line_c_red
-    m_line_l_red = -a_line_l_red / b_line_l_red
-    m_line_r_red = -a_line_r_red / b_line_r_red
-
-    angle_l_red, angle_l_red_deg = angle_between_lines(m_line_c_red, m_line_l_red)
-    angle_r_red, angle_r_red_deg = angle_between_lines(m_line_c_red, m_line_r_red)
-
-    # Calcola la matrice di rotazione media tra le rette blu e rosse
-    angle_l = (angle_l_blue + angle_l_red) / 2
-    angle_r = (angle_r_blue + angle_r_red) / 2
-
-    rotation_matrix_l_2_c = rotation_matrix_from_axis_angle([0, 0, 1], angle_l)
-    rotation_matrix_r_2_c = rotation_matrix_from_axis_angle([0, 0, 1], angle_r)
-
-    # Ruota la pointcloud di sinistra
-    pcd_left.rotate(rotation_matrix_l_2_c)
-    # Ruota la pointcloud di destra
-    pcd_right.rotate(rotation_matrix_r_2_c)
+    o3d.visualization.draw_geometries([pcd_center, pcd_left])
     
 
-    # TODO: Trovare la rotazione che allinei al meglio le linee
-    # Per ogni vista allineare la linea orizzontale con la linea orizzontale della vista centrale
-    # Calcolare la matrice di rotazione tra le due linee
-    # Ruotare la pointcloud di sinistra e di destra
+    v1 = corner_r_1 - corner_r_2
+    v2 = corner_c_1 - corner_c_2
+    R_R2C = matrix_between_vectors(v2, v1, clockwise=False)
+    rot_center = np.asarray(pcd_right.points)[corner_r1_index][0]
+    pcd_right.rotate(R_R2C, center=rot_center)
 
     o3d.visualization.draw_geometries([pcd_center, pcd_right])
+
+    print("R_L2C: ", R_L2C)
+    print("T_L2C: ", T_L2C)
+    print("R_R2C: ", R_R2C)
+    print("T_R2C: ", T_R2C)
+    o3d.visualization.draw_geometries([pcd_center, pcd_left, pcd_right])
+
     
 

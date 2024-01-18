@@ -2,9 +2,15 @@ from tkinter import *
 from tkinter import ttk
 from utilsjacopo import *
 import cv2
+from geometry import *
 from PIL import Image, ImageTk
 from camera import Camera
 import pyrealsense2 as rs
+import numpy as np
+import copy
+import open3d as o3d
+from qreader import QReader
+
 
 def acquire_window():
     global window, live_feed, canvas_left, canvas_center, canvas_right
@@ -25,17 +31,19 @@ def acquire_window():
     canvas_right = Canvas(cameras, width=480, height=640, bg='black')
     canvas_right.pack(side="left", padx=10)
     cameras.pack(expand=True, fill=BOTH)
+    execute_acquire_btn = ttk.Button(live_feed, text="Acquire", width=40, command=acquire)
+    execute_acquire_btn.pack()
     live_feed.pack(expand=True, fill=BOTH)
     # Run the loop
     update_video()
     acquire_window.mainloop()
 
 def acquire():
-    global window, live_feed, canvas_left, canvas_center, canvas_right, msg_lbl, acquire_btn, schedule_id
+    global window, live_feed, canvas_left, canvas_center, canvas_right, msg_lbl, acquire_btn, schedule_id, center, left, right, calibration_dir
     live_feed.after_cancel(schedule_id)
-    # TODO: Richiamare la funzione get data da ogni singola istanza delle camere, ricavare pointcloud, applicare matrice trasformazione e salvare i dati
-
     print("Acquiring")
+    acquire_shot(center, left, right, calibration_dir)
+    msg_lbl.config(text="Acquisition completed.")
     #acquire_window()
     
 def open_calibration_window():
@@ -51,7 +59,7 @@ def open_calibration_window():
     title.pack()
     description_label = ttk.Label(live_feed, text=calibrate_text, font=("Arial", 10), foreground="black")
     description_label.pack()
-    btn_calibrate = ttk.Button(live_feed, text="Calibrate", width=40, command=calibrate_procedure)
+    btn_calibrate = ttk.Button(live_feed, text="Calibrate", width=40, command=confirmation)
     btn_calibrate.pack()
     cameras = ttk.Frame(live_feed)
     canvas_left = Canvas(cameras, width=480, height=640, bg='black')
@@ -68,43 +76,65 @@ def open_calibration_window():
 
 
 def update_video():
-    global schedule_id
-    ret, frame = cap.read()
-    # TODO: Richiamare la funzione get data da ogni singola istanza delle camere e inserire i dati in uno stack (forse no)
-    # Quando l'utente clicca su calibrate, la funzione calibrate_procedure() viene richiamata e lo stream viene fermato
-    if ret:
+    global schedule_id, center, left, right
+    center_frame, _ = center.detect_quadrilaterals()
+    left_frame, _ = left.detect_quadrilaterals()
+    right_frame, _ = right.detect_quadrilaterals()
+    
+    if center_frame is not None and left_frame is not None and right_frame is not None:
         # Convert the OpenCV BGR image to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb_frame = cv2.rotate(rgb_frame, cv2.ROTATE_90_CLOCKWISE)
-        # Convert the RGB image to a Tkinter PhotoImage
-        photo = ImageTk.PhotoImage(Image.fromarray(rgb_frame))
+        rgb_frame_c = cv2.cvtColor(center_frame, cv2.COLOR_BGR2RGB)
+        rgb_frame_c = cv2.rotate(rgb_frame_c, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        rgb_frame_c = cv2.resize(rgb_frame_c, (480, 640))
+        photo_c = ImageTk.PhotoImage(Image.fromarray(rgb_frame_c))
+
+        rgb_frame_l = cv2.cvtColor(left_frame, cv2.COLOR_BGR2RGB)
+        rgb_frame_l = cv2.rotate(rgb_frame_l, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        rgb_frame_l = cv2.resize(rgb_frame_l, (480, 640))
+        photo_l = ImageTk.PhotoImage(Image.fromarray(rgb_frame_l))
+
+        rgb_frame_r = cv2.cvtColor(right_frame, cv2.COLOR_BGR2RGB)
+        rgb_frame_r = cv2.rotate(rgb_frame_r, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        rgb_frame_r = cv2.resize(rgb_frame_r, (480, 640))
+        photo_r = ImageTk.PhotoImage(Image.fromarray(rgb_frame_r))
+
         
         # Update the Tkinter canvas with the new PhotoImage
-        canvas_left.create_image(0, 0, anchor=NW, image=photo)
-        canvas_left.photo = photo
-        canvas_center.create_image(0, 0, anchor=NW, image=photo)
-        canvas_center.photo = photo
-        canvas_right.create_image(0, 0, anchor=NW, image=photo)
-        canvas_right.photo = photo
+        canvas_left.create_image(0, 0, anchor=NW, image=photo_l)
+        canvas_left.photo = photo_l
+        canvas_center.create_image(0, 0, anchor=NW, image=photo_c)
+        canvas_center.photo = photo_c
+        canvas_right.create_image(0, 0, anchor=NW, image=photo_r)
+        canvas_right.photo = photo_r
     # Schedule the update function to be called after a delay
     schedule_id = live_feed.after(10, update_video)
+    
 
 def calibrate_procedure():
-    global cal_window, schedule_id
+    global cal_window, center, left, right, calibration_dir
+    cal_window.destroy()
+    compute_calibration(center=center, left=left, right=right)  
+    calibration_dir = get_calibration()
+    msg_lbl.config(text="Calibration completed, you can now acquire the data.")
+
+def confirmation():
+    global cal_window, schedule_id, cal_window
     print("Calibrating")
     live_feed.after_cancel(schedule_id)
     # TODO: usare i valori nello stack per calibrare il sistema
     acquire_btn.config(state="enabled")
-    msg_lbl.config(text="Calibration completed, you can now acquire the data.")
-    cal_window.destroy()
+    confirmation_button = ttk.Button(live_feed, text="CONFERMA", width=40, command=calibrate_procedure)
+    confirmation_button.pack()
+    
 
-global center, left, right
+global center, left, right, calibration_dir
 
-SCALA = 3
+SCALA = 1
+CLAMP_MAX = 2000
 colorizer = rs.colorizer()
-center = Camera("Center", "210622061176", SCALA, 100, 800)
-left = Camera("Left", "211222063114", SCALA, 100, 800)
-right = Camera("Right", "211122060792", SCALA, 100, 800)
+center = Camera("Center", "210622061176", SCALA, 100, CLAMP_MAX, True)
+left = Camera("Left", "211222063114", SCALA, 100, CLAMP_MAX, False)
+right = Camera("Right", "211122060792", SCALA, 100, CLAMP_MAX, False)
 
 cap = cv2.VideoCapture(0)
 window = Tk()
@@ -126,7 +156,7 @@ msg_lbl.pack()
 frm.pack(expand=True, fill=BOTH)
 if check_calibration():
     acquire_btn.config(state="enabled")
-    M_L2C, M_R2C = get_calibration()
+    calibration_dir = get_calibration()
 else:
     print("No calibration found")
     msg_lbl.config(text="No calibration found, please calibrate the system first.")
