@@ -12,8 +12,8 @@ import open3d as o3d
 from qreader import QReader
 
 
-def acquire_window():
-    global window, live_feed, canvas_left, canvas_center, canvas_right
+def show_acquire_window():
+    global window, live_feed, canvas_left, canvas_center, canvas_right, acquire_window
     print("Open Camera")
     acquire_window = Toplevel(window)
     acquire_window.title("Separate Window")
@@ -35,15 +35,17 @@ def acquire_window():
     execute_acquire_btn.pack()
     live_feed.pack(expand=True, fill=BOTH)
     # Run the loop
-    update_video()
+    update_video(quadrilaterals=False)
     acquire_window.mainloop()
 
 def acquire():
     global window, live_feed, canvas_left, canvas_center, canvas_right, msg_lbl, acquire_btn, schedule_id, center, left, right, calibration_dir
+    global acquire_window
     live_feed.after_cancel(schedule_id)
     print("Acquiring")
     acquire_shot(center, left, right, calibration_dir)
     msg_lbl.config(text="Acquisition completed.")
+    acquire_window.destroy()
     #acquire_window()
     
 def open_calibration_window():
@@ -71,15 +73,20 @@ def open_calibration_window():
     cameras.pack(expand=True, fill=BOTH)
     live_feed.pack(expand=True, fill=BOTH)
     # Run the loop
-    update_video()
+    update_video(quadrilaterals=True)
     cal_window.mainloop()
 
 
-def update_video():
+def update_video(quadrilaterals: bool = False):
     global schedule_id, center, left, right
-    center_frame, _ = center.detect_quadrilaterals()
-    left_frame, _ = left.detect_quadrilaterals()
-    right_frame, _ = right.detect_quadrilaterals()
+    if quadrilaterals:
+        center_frame, _ = center.detect_quadrilaterals()
+        left_frame, _ = left.detect_quadrilaterals()
+        right_frame, _ = right.detect_quadrilaterals()
+    else:
+        center_frame = center.get_rgb_frame()
+        left_frame = left.get_rgb_frame()
+        right_frame = right.get_rgb_frame()
     
     if center_frame is not None and left_frame is not None and right_frame is not None:
         # Convert the OpenCV BGR image to RGB
@@ -98,7 +105,6 @@ def update_video():
         rgb_frame_r = cv2.resize(rgb_frame_r, (480, 640))
         photo_r = ImageTk.PhotoImage(Image.fromarray(rgb_frame_r))
 
-        
         # Update the Tkinter canvas with the new PhotoImage
         canvas_left.create_image(0, 0, anchor=NW, image=photo_l)
         canvas_left.photo = photo_l
@@ -107,7 +113,7 @@ def update_video():
         canvas_right.create_image(0, 0, anchor=NW, image=photo_r)
         canvas_right.photo = photo_r
     # Schedule the update function to be called after a delay
-    schedule_id = live_feed.after(10, update_video)
+    schedule_id = live_feed.after(10, update_video, quadrilaterals)
     
 
 def calibrate_procedure():
@@ -129,8 +135,8 @@ def confirmation():
 
 global center, left, right, calibration_dir
 
-SCALA = 1
-CLAMP_MAX = 2000
+SCALA = 3
+CLAMP_MAX = 1000
 colorizer = rs.colorizer()
 center = Camera("Center", "210622061176", SCALA, 100, CLAMP_MAX, True)
 left = Camera("Left", "211222063114", SCALA, 100, CLAMP_MAX, False)
@@ -146,17 +152,20 @@ title = ttk.Label(frm, text="Realsense", font=("Arial", 10), foreground="black")
 title.pack()
 acquire_btn = ttk.Button(frm, text="Calibrate", command=open_calibration_window)
 acquire_btn.pack()
-acquire_btn = ttk.Button(frm, text="Acquire", command=acquire_window)
+acquire_btn = ttk.Button(frm, text="Acquire", command=show_acquire_window)
 acquire_btn.pack()
 acquire_btn.config(state="disabled")
 quit_btn = ttk.Button(frm, text="Quit", command=window.destroy)
 quit_btn.pack()
+last_cal = ttk.Label(frm, text="Last calibration: NOT FOUND")
+last_cal.pack()
 msg_lbl = ttk.Label(frm, text="")
 msg_lbl.pack()
 frm.pack(expand=True, fill=BOTH)
 if check_calibration():
     acquire_btn.config(state="enabled")
     calibration_dir = get_calibration()
+    last_cal.config(text=f"Last calibration: {calibration_dir}")
 else:
     print("No calibration found")
     msg_lbl.config(text="No calibration found, please calibrate the system first.")

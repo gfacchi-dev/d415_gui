@@ -2,7 +2,6 @@ import pyrealsense2 as rs
 import open3d as o3d
 import numpy as np
 import cv2
-from utilsjacopo import flip_180, rotate_90
 
 class Camera:
     
@@ -54,11 +53,8 @@ class Camera:
 
     def get_frame_and_add_to_queue(self):
         frame = self.get_depth_frame()
-        if self.last_frame == 89:
-            self.last_rgb = self.get_rgb_frame()
-        else:
-            self.depth_queue[:, :, self.last_frame] = frame
-            self.last_frame += 1 
+        self.depth_queue[:, :, self.last_frame] = frame
+        self.last_frame += 1
 
     def get_depth_frame(self):
         frames = self.pipeline.wait_for_frames()
@@ -102,10 +98,12 @@ class Camera:
             color_array = np.asanyarray(cv2.rotate(color_array, cv2.ROTATE_180))
             depth_array = np.flip(depth_array, axis=(0, 1))
 
-        cv2.imwrite(f"tmpDepth.png", np.uint16(depth_array))
-        cv2.imwrite(f"tmpColor.png", np.asanyarray(color_array))
-        rgb = o3d.io.read_image("tmpColor.png")
-        depth = o3d.io.read_image("tmpDepth.png")
+        cv2.imwrite(f"tmpDepth{self.name}.png", np.uint16(depth_array))
+        cv2.imwrite(f"tmpColor{self.name}.png", np.asanyarray(color_array))
+        color_file_name = f"tmpColor{self.name}.png"
+        depth_file_name = f"tmpDepth{self.name}.png"
+        rgb = o3d.io.read_image(color_file_name)
+        depth = o3d.io.read_image(depth_file_name)
         # Create rgbd image from color and depth images
 
         rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
@@ -119,18 +117,18 @@ class Camera:
         return pcd, (color_array, depth_array)
     
     def get_pcd_from_rgb_depth(self, rgb, depth):
-        cv2.imwrite(f"tmpTmpColor.png", np.asanyarray(rgb))
-        cv2.imwrite(f"tmpTmpDepth.png", np.uint16(depth))
-        rgb = o3d.io.read_image("tmpTmpColor.png")
-        depth = o3d.io.read_image("tmpTmpDepth.png")
+        cv2.imwrite(f"tmpColor{self.name}.png", np.asanyarray(rgb))
+        cv2.imwrite(f"tmpTmpDepth{self.name}.png", np.uint16(depth))
+        color_file_name = f"tmpColor{self.name}.png"
+        depth_file_name = f"tmpTmpDepth{self.name}.png"
+        rgb = o3d.io.read_image(color_file_name)
+        depth = o3d.io.read_image(depth_file_name)
         # Create rgbd image from color and depth images
         rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
             rgb, depth, convert_rgb_to_intensity=False
         )
         camera_intrinsic = self.get_intrinsics()
         pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, camera_intrinsic)
-        rotate_90(pcd)
-        flip_180(pcd)
         return pcd
     
     def detect_quadrilaterals(self):
